@@ -1,7 +1,7 @@
 from collections import defaultdict
 
-from app.config import ToleranceConfig
-from app.models import DiscrepancyCase
+from config import ToleranceConfig
+from models import DiscrepancyCase
 
 
 class DiscrepancyInvestigator:
