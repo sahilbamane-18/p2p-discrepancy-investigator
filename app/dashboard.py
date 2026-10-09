@@ -4,12 +4,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.config import ToleranceConfig
-from app.data_loader import load_deliveries, load_invoices, load_purchase_orders
-from app.investigator import DiscrepancyInvestigator
+from config import ToleranceConfig
+from data_loader import load_deliveries, load_invoices, load_purchase_orders
+from investigator import DiscrepancyInvestigator
 
 
-DATA_PATH = Path(__file__).resolve().parent / "data"
+DATA_PATH = Path(__file__).resolve().parent.parent / "data"
 
 
 def _load_default_data():
