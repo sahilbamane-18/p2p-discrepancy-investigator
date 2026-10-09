@@ -1,59 +1,78 @@
-import argparse
 import json
+import sqlite3
 from pathlib import Path
 
-from app.data_loader import load_deliveries, load_invoices, load_purchase_orders
-from app.investigator import DiscrepancyInvestigator
 
+class ReviewQueueStore:
+    def __init__(self, db_path: str | Path = "data/review_queue.db"):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
 
-def build_investigator(data_dir: str | Path):
-    data_dir = Path(data_dir)
-    purchase_orders = load_purchase_orders(data_dir / "purchase_orders.csv")
-    deliveries = load_deliveries(data_dir / "deliveries.csv")
-    invoices = load_invoices(data_dir / "invoices.csv")
-    return DiscrepancyInvestigator(purchase_orders, deliveries, invoices)
+    def _initialize(self):
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS review_cases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vendor_id TEXT,
+                    po_number TEXT,
+                    invoice_number TEXT,
+                    item_code TEXT,
+                    expected_quantity REAL,
+                    invoice_quantity REAL,
+                    expected_unit_price REAL,
+                    invoice_unit_price REAL,
+                    quantity_delta REAL,
+                    price_delta REAL,
+                    financial_impact REAL,
+                    reasons TEXT,
+                    priority TEXT,
+                    risk_score INTEGER,
+                    case_type TEXT,
+                    review_status TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.commit()
 
+    def save_cases(self, cases):
+        with sqlite3.connect(self.db_path) as connection:
+            for case in cases:
+                connection.execute(
+                    """
+                    INSERT INTO review_cases (
+                        vendor_id, po_number, invoice_number, item_code,
+                        expected_quantity, invoice_quantity, expected_unit_price,
+                        invoice_unit_price, quantity_delta, price_delta, financial_impact,
+                        reasons, priority, risk_score, case_type, review_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        case.get("vendor_id"),
+                        case.get("po_number"),
+                        case.get("invoice_number"),
+                        case.get("item_code"),
+                        case.get("expected_quantity"),
+                        case.get("invoice_quantity"),
+                        case.get("expected_unit_price"),
+                        case.get("invoice_unit_price"),
+                        case.get("quantity_delta"),
+                        case.get("price_delta"),
+                        case.get("financial_impact"),
+                        json.dumps(case.get("reasons", [])),
+                        case.get("priority"),
+                        case.get("risk_score"),
+                        case.get("case_type", "invoice_mismatch"),
+                        case.get("review_status", "new"),
+                    ),
+                )
+            connection.commit()
 
-def print_report(report):
-    summary = report["summary"]
-    print("Purchase-to-Payment Discrepancy Investigation")
-    print("=" * 52)
-    print(f"Cases identified: {summary['case_count']}")
-    print(f"Total financial impact: ${summary['total_financial_impact']:.2f}")
-    print(f"Duplicate invoice groups: {summary['duplicate_invoice_groups']}")
-    print(
-        "Priority mix: "
-        f"Critical={summary['priority_breakdown']['Critical']}, "
-        f"High={summary['priority_breakdown']['High']}, "
-        f"Medium={summary['priority_breakdown']['Medium']}, "
-        f"Low={summary['priority_breakdown']['Low']}"
-    )
-    print()
-
-    for case in report["cases"]:
-        print(
-            f"[{case['priority']}] {case['vendor_id']} | {case['po_number']} | "
-            f"{case['invoice_number']} | {case['item_code']} | "
-            f"Risk {case['risk_score']} | Impact ${case['financial_impact']:.2f}"
-        )
-        print(f"  Quantity delta: {case['quantity_delta']:+.2f} units")
-        print(f"  Price delta: ${case['price_delta']:+.2f} per unit")
-        print(f"  Reasons: {', '.join(case['reasons'])}")
-        print()
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Purchase-to-Payment Discrepancy Investigator")
-    parser.add_argument("--data-dir", default="data", help="Directory containing purchase_orders.csv, deliveries.csv, and invoices.csv")
-    parser.add_argument("--json", action="store_true", help="Print the result as JSON instead of a terminal report")
-    args = parser.parse_args()
-
-    investigator = build_investigator(args.data_dir)
-    report = investigator.investigate()
-
-    if args.json:
-        print(json.dumps(report, indent=2))
-    else:
-        print_report(report)
-
-    return 0
+    def list_cases(self):
+        with sqlite3.connect(self.db_path) as connection:
+            rows = connection.execute(
+                "SELECT * FROM review_cases ORDER BY risk_score DESC, created_at DESC"
+            ).fetchall()
+        return rows
