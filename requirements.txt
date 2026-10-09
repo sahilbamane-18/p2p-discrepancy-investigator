@@ -1,1 +1,173 @@
+from collections import defaultdict
+from dataclasses import dataclass
 
+from app.models import DiscrepancyCase
+
+
+@dataclass(frozen=True)
+class ToleranceConfig:
+    quantity_tolerance_pct: float = 0.02
+    price_tolerance_pct: float = 0.02
+    absolute_quantity_tolerance: float = 0.0
+    absolute_price_tolerance: float = 0.0
+
+
+class DiscrepancyInvestigator:
+    def __init__(self, purchase_orders, deliveries, invoices, tolerance=None):
+        self.purchase_orders = list(purchase_orders)
+        self.deliveries = list(deliveries)
+        self.invoices = list(invoices)
+        self.tolerance = tolerance or ToleranceConfig()
+
+    def _po_lookup(self):
+        lookup = defaultdict(list)
+        for order in self.purchase_orders:
+            lookup[order.match_key()].append(order)
+        return lookup
+
+    def _delivery_lookup(self):
+        lookup = defaultdict(float)
+        for delivery in self.deliveries:
+            lookup[delivery.match_key()] += delivery.quantity
+        return lookup
+
+    def _duplicate_invoices(self):
+        duplicates = defaultdict(list)
+        for invoice in self.invoices:
+            key = (invoice.vendor_id, invoice.invoice_number)
+            duplicates[key].append(invoice)
+        return {key: items for key, items in duplicates.items() if len(items) > 1}
+
+    def _risk_score(self, financial_impact, quantity_delta, price_delta, duplicate_invoice):
+        score = 10
+
+        if duplicate_invoice:
+            score += 30
+        if abs(quantity_delta) > 0:
+            score += min(30, max(10, abs(quantity_delta) * 2))
+        if abs(price_delta) > 0:
+            score += min(25, max(8, abs(price_delta) * 35))
+        score += min(25, int(financial_impact / 250))
+        return max(0, min(score, 100))
+
+    def _priority_for_score(self, score):
+        if score >= 75:
+            return "Critical"
+        if score >= 50:
+            return "High"
+        if score >= 25:
+            return "Medium"
+        return "Low"
+
+    def _expected_quantity(self, invoice, po_match, delivery_total):
+        if po_match and delivery_total > 0:
+            return delivery_total
+        if po_match:
+            return po_match.quantity
+        return invoice.quantity
+
+    def _tolerance_threshold(self, expected_value, percent_tolerance, absolute_tolerance):
+        if expected_value == 0:
+            return absolute_tolerance
+        return max(absolute_tolerance, abs(expected_value) * percent_tolerance)
+
+    def investigate(self):
+        po_lookup = self._po_lookup()
+        delivery_lookup = self._delivery_lookup()
+        duplicate_invoices = self._duplicate_invoices()
+
+        cases = []
+        visible_invoice_keys = set()
+
+        for invoice in self.invoices:
+            invoice_key = (invoice.vendor_id, invoice.invoice_number, invoice.po_number, invoice.item_code)
+            if invoice_key in visible_invoice_keys:
+                continue
+            visible_invoice_keys.add(invoice_key)
+
+            order_matches = po_lookup.get((invoice.vendor_id, invoice.po_number, invoice.item_code), [])
+            po_match = order_matches[0] if order_matches else None
+            delivery_total = delivery_lookup.get((invoice.vendor_id, invoice.po_number, invoice.item_code), 0.0)
+            expected_quantity = self._expected_quantity(invoice, po_match, delivery_total)
+            expected_price = po_match.unit_price if po_match else 0.0
+
+            quantity_delta = invoice.quantity - expected_quantity
+            price_delta = invoice.unit_price - expected_price
+
+            duplicate_invoice = (invoice.vendor_id, invoice.invoice_number) in duplicate_invoices
+            reasons = []
+
+            if po_match is None:
+                reasons.append("No matching purchase order line found")
+
+            quantity_tolerance = self._tolerance_threshold(
+                expected_quantity,
+                self.tolerance.quantity_tolerance_pct,
+                self.tolerance.absolute_quantity_tolerance,
+            )
+            if abs(quantity_delta) > quantity_tolerance:
+                reasons.append(f"Quantity mismatch: {quantity_delta:+.2f} units")
+
+            price_tolerance = self._tolerance_threshold(
+                expected_price,
+                self.tolerance.price_tolerance_pct,
+                self.tolerance.absolute_price_tolerance,
+            )
+            if abs(price_delta) > price_tolerance:
+                reasons.append(f"Price mismatch: {price_delta:+.2f} per unit")
+
+            if duplicate_invoice:
+                reasons.append("Duplicate invoice detected")
+
+            if not reasons:
+                continue
+
+            financial_impact = abs(quantity_delta * expected_price) + abs(price_delta * invoice.quantity)
+            if not po_match and invoice.quantity == 0:
+                financial_impact = 0.0
+
+            risk_score = self._risk_score(financial_impact, quantity_delta, price_delta, duplicate_invoice)
+            priority = self._priority_for_score(risk_score)
+
+            case = DiscrepancyCase(
+                vendor_id=invoice.vendor_id,
+                po_number=invoice.po_number,
+                invoice_number=invoice.invoice_number,
+                item_code=invoice.item_code,
+                expected_quantity=expected_quantity,
+                invoice_quantity=invoice.quantity,
+                expected_unit_price=expected_price,
+                invoice_unit_price=invoice.unit_price,
+                quantity_delta=quantity_delta,
+                price_delta=price_delta,
+                financial_impact=financial_impact,
+                reasons=reasons,
+                priority=priority,
+                risk_score=risk_score,
+            )
+            cases.append(case)
+
+        cases.sort(key=lambda item: item.risk_score, reverse=True)
+
+        summary = {
+            "record_count": len(self.invoices),
+            "case_count": len(cases),
+            "duplicate_invoice_groups": len(duplicate_invoices),
+            "total_financial_impact": round(sum(case.financial_impact for case in cases), 2),
+            "priority_breakdown": {
+                "Critical": sum(1 for case in cases if case.priority == "Critical"),
+                "High": sum(1 for case in cases if case.priority == "High"),
+                "Medium": sum(1 for case in cases if case.priority == "Medium"),
+                "Low": sum(1 for case in cases if case.priority == "Low"),
+            },
+            "largest_case": max((case.financial_impact for case in cases), default=0.0),
+        }
+
+        return {
+            "summary": summary,
+            "cases": [case.to_dict() for case in cases],
+            "duplicate_invoices": {
+                str(key): [item.invoice_number for item in items]
+                for key, items in duplicate_invoices.items()
+            },
+        }
