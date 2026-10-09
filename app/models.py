@@ -1,67 +1,66 @@
-import csv
-from pathlib import Path
-
-from app.models import DeliveryRecord, InvoiceRecord, PurchaseOrderLine
+from dataclasses import asdict, dataclass
 
 
-def _to_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+@dataclass(frozen=True)
+class PurchaseOrderLine:
+    vendor_id: str
+    po_number: str
+    item_code: str
+    quantity: float
+    unit_price: float
+    currency: str = "USD"
+
+    def match_key(self):
+        return (self.vendor_id, self.po_number, self.item_code)
+
+    def line_total(self):
+        return self.quantity * self.unit_price
 
 
-def load_purchase_orders(path: str | Path):
-    path = Path(path)
-    records = []
-    with path.open(newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            records.append(
-                PurchaseOrderLine(
-                    vendor_id=(row.get("vendor_id") or "").strip(),
-                    po_number=(row.get("po_number") or "").strip(),
-                    item_code=(row.get("item_code") or "").strip(),
-                    quantity=_to_float(row.get("quantity")),
-                    unit_price=_to_float(row.get("unit_price")),
-                    currency=(row.get("currency") or "USD").strip() or "USD",
-                )
-            )
-    return records
+@dataclass(frozen=True)
+class DeliveryRecord:
+    vendor_id: str
+    po_number: str
+    item_code: str
+    quantity: float
+    delivery_id: str
+
+    def match_key(self):
+        return (self.vendor_id, self.po_number, self.item_code)
 
 
-def load_deliveries(path: str | Path):
-    path = Path(path)
-    records = []
-    with path.open(newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            records.append(
-                DeliveryRecord(
-                    vendor_id=(row.get("vendor_id") or "").strip(),
-                    po_number=(row.get("po_number") or "").strip(),
-                    item_code=(row.get("item_code") or "").strip(),
-                    quantity=_to_float(row.get("quantity")),
-                    delivery_id=(row.get("delivery_id") or "").strip(),
-                )
-            )
-    return records
+@dataclass(frozen=True)
+class InvoiceRecord:
+    vendor_id: str
+    po_number: str
+    invoice_number: str
+    item_code: str
+    quantity: float
+    unit_price: float
+
+    def match_key(self):
+        return (self.vendor_id, self.po_number, self.item_code)
 
 
-def load_invoices(path: str | Path):
-    path = Path(path)
-    records = []
-    with path.open(newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            records.append(
-                InvoiceRecord(
-                    vendor_id=(row.get("vendor_id") or "").strip(),
-                    po_number=(row.get("po_number") or "").strip(),
-                    invoice_number=(row.get("invoice_number") or "").strip(),
-                    item_code=(row.get("item_code") or "").strip(),
-                    quantity=_to_float(row.get("quantity")),
-                    unit_price=_to_float(row.get("unit_price")),
-                )
-            )
-    return records
+@dataclass
+class DiscrepancyCase:
+    vendor_id: str
+    po_number: str
+    invoice_number: str
+    item_code: str
+    expected_quantity: float
+    invoice_quantity: float
+    expected_unit_price: float
+    invoice_unit_price: float
+    quantity_delta: float
+    price_delta: float
+    financial_impact: float
+    reasons: list[str]
+    priority: str
+    risk_score: int
+    case_type: str = "invoice_mismatch"
+    review_status: str = "new"
+
+    def to_dict(self):
+        data = asdict(self)
+        return data
