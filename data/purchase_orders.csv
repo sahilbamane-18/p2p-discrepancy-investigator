@@ -1,0 +1,7 @@
+# Sample data set for purchase orders, deliveries, and invoices
+vendor_id,po_number,item_code,quantity,unit_price
+VEND-001,PO-1001,MOUSE,100,25
+VEND-001,PO-1001,KEYBOARD,40,45
+VEND-002,PO-2102,MONITOR,20,180
+VEND-003,PO-3303,LAPTOP,5,980
+VEND-003,PO-3303,ADAPTER,10,30
